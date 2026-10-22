@@ -1,0 +1,25 @@
+{
+	"name": "inh",
+	"version": "1.0.0",
+	"description": "Terminalde oynanan, cok oyunculu simule hacking oyunu",
+	"type": "module",
+	"private": true,
+	"bin": {
+		"inh": "dist/index.js"
+	},
+	"engines": {
+		"node": ">=22.13"
+	},
+	"scripts": {
+		"build": "tsc",
+		"start": "node dist/index.js",
+		"client": "node dist/index.js client",
+		"dev": "tsx src/index.ts",
+		"dev:client": "tsx src/index.ts client"
+	},
+	"devDependencies": {
+		"@types/node": "^22.13.0",
+		"typescript": "^5.9.0",
+		"tsx": "^4.19.0"
+	}
+}
