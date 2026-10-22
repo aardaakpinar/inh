@@ -1,5 +1,5 @@
-import { sleep, rint } from "./util.js";
-import type { Game } from "./world.js";
+import { sleep } from "../../core/util.js";
+import type { World } from "../../core/world.js";
 
 export class Disconnected extends Error {
   constructor() {
@@ -91,7 +91,7 @@ export class Sess {
   spoof: string | null = null;
 
   constructor(
-    readonly game: Game,
+    readonly world: World,
     private readonly io: Io,
     private readonly chan: LineChannel,
   ) {}
@@ -116,7 +116,7 @@ export class Sess {
   }
 
   lag(a = 0.2, b = 0.7): Promise<void> {
-    return sleep(a * 1000 + (rint(0, 1000) / 1000) * (b - a) * 1000);
+    return sleep(a * 1000 + (this.world.rng.int(0, 1000) / 1000) * (b - a) * 1000);
   }
 
   close(): void {

@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import "./quiet.js"; // node:sqlite uyarisini susturur; diger importlardan ONCE gelmeli
-import { DEFAULT_PORT } from "./config.js";
-import { runClient } from "./client.js";
-import { runMulti } from "./server.js";
+import { DEFAULT_PORT } from "./core/config.js";
+import { runClient } from "./infra/net/client.js";
+import { runMulti } from "./infra/net/server.js";
 
 const USAGE = `INH - terminal CTF oyunu
 

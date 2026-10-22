@@ -1,11 +1,15 @@
 import net from "node:net";
 import { existsSync } from "node:fs";
 import { networkInterfaces } from "node:os";
-import { login, shell } from "./commands.js";
-import { B, D, G, X } from "./config.js";
-import { Repo } from "./db.js";
+import { login } from "../../features/auth/login.js";
+import { shell } from "../../features/shell.js";
+import { B, D, G, X } from "../../ui/ansi.js";
+import { SystemClock } from "../../core/clock.js";
+import { EventBus } from "../../core/events.js";
+import { CryptoRng } from "../../core/random.js";
+import { World } from "../../core/world.js";
+import { Repo } from "../sqlite/repository.js";
 import { AskTimeout, Disconnected, LineChannel, Sess, type Io } from "./session.js";
-import { Game } from "./world.js";
 
 export interface RunOptions {
   port: number;
@@ -20,26 +24,29 @@ async function handle(s: Sess): Promise<void> {
   } catch (e) {
     if (!(e instanceof Disconnected || e instanceof AskTimeout)) console.error("oturum hatasi:", e);
   } finally {
-    if (s.ip && s.game.online.get(s.ip) === s) s.game.online.delete(s.ip);
+    if (s.ip && s.world.online.get(s.ip) === s) s.world.online.delete(s.ip);
     s.close();
   }
 }
 
-function openWorld(dbPath: string, importFile?: string): Game {
-  const repo = new Repo(dbPath);
+function openWorld(dbPath: string, importFile?: string): World {
+  const rng = new CryptoRng();
+  const clock = new SystemClock();
+  const events = new EventBus();
+  const repo = new Repo(dbPath, rng);
   if (!repo.hasHosts() && importFile && existsSync(importFile)) {
     const r = repo.importLegacy(importFile);
     console.log(`[*] ${importFile} icindeki eski kayit aktarildi: ${r.hosts} sunucu, ${r.users} oyuncu.`);
   }
-  const game = new Game(repo);
-  game.seedNpcs();
-  game.start();
-  return game;
+  const world = new World(repo, events, clock, rng);
+  world.seedNpcs();
+  world.start();
+  return world;
 }
 
 // ------------------------------------------------------------------ COK OYUNCULU
 export async function runMulti(opts: RunOptions): Promise<void> {
-  const game = openWorld(opts.dbPath, opts.importFile);
+  const world = openWorld(opts.dbPath, opts.importFile);
   const sockets = new Set<net.Socket>();
 
   const server = net.createServer((socket) => {
@@ -56,7 +63,7 @@ export async function runMulti(opts: RunOptions): Promise<void> {
       chan.end();
     });
     socket.on("error", () => chan.end());
-    void handle(new Sess(game, io, chan));
+    void handle(new Sess(world, io, chan));
   });
 
   try {
@@ -68,17 +75,17 @@ export async function runMulti(opts: RunOptions): Promise<void> {
       });
     });
   } catch (e) {
-    game.stop();
-    game.repo.close();
+    world.stop();
+    world.repo.close();
     throw e;
   }
   server.on("error", (e) => console.error("sunucu hatasi:", e));
 
   const shutdown = () => {
-    game.stop();
+    world.stop();
     server.close();
     for (const s of sockets) s.destroy();
-    game.repo.close();
+    world.repo.close();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

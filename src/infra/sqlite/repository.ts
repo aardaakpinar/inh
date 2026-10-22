@@ -4,27 +4,11 @@ import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
 import { mkdirSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
-import { SERVICES, type Service } from "./config.js";
-import { rint, sample } from "./util.js";
-
-export interface Host {
-  ip: string;
-  name: string;
-  owner: string;
-  npc: boolean;
-  level: number;
-  score: number;
-  honey: boolean;
-  lockUntil: number; // ms (epoch)
-  lockCdUntil: number; // ms (epoch)
-}
-
-export interface UserRow {
-  name: string;
-  ip: string;
-  salt: string;
-  pw: string;
-}
+import { SERVICES } from "../../content/systems.js";
+import { cryptoRng, type Rng } from "../../core/random.js";
+import type { Host, ScanHost, UserRow } from "../../domain/host.js";
+import type { GameRepository, LegacyImportResult, TopPlayer } from "../../domain/ports.js";
+import type { Service } from "../../domain/service.js";
 
 // node:sqlite'i statik import etmiyoruz: ESM'de yerlesik modullerin uyarisi, quiet.ts calismadan
 // once (baglama asamasinda) basilirdi. Burada kod calisirken yukluyoruz.
@@ -115,12 +99,15 @@ interface LegacyData {
   users: Record<string, { ip: string; salt: string; pw: string }>;
 }
 
-export class Repo {
+export class Repo implements GameRepository {
   private db: DatabaseSync;
   private cache = new Map<string, StatementSync>();
   private closed = false;
 
-  constructor(path: string) {
+  constructor(
+    path: string,
+    private readonly rng: Rng = cryptoRng,
+  ) {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.db = new Database(path);
     this.db.exec(SCHEMA);
@@ -191,19 +178,19 @@ export class Repo {
    * Tarama sonucu: tum oyuncu sunuculari gorunur, NPC'lerden sadece bir ornek gelir.
    * Boylece rakip oyuncular taramada kaybolmaz, ag da her taramada ayni gorunmez.
    */
-  scanHosts(excludeIp: string, npcLimit: number): { ip: string; name: string; npc: boolean }[] {
+  scanHosts(excludeIp: string, npcLimit: number): ScanHost[] {
     const rows = this.all<{ ip: string; name: string; npc: number }>(
       "SELECT ip, name, npc FROM hosts WHERE ip != ? AND npc = 0 ORDER BY name",
       excludeIp,
     );
     const npcs = this.all<{ ip: string; name: string; npc: number }>(
-      "SELECT ip, name, npc FROM hosts WHERE ip != ? AND npc = 1 ORDER BY RANDOM() LIMIT ?",
-      excludeIp, npcLimit,
+      "SELECT ip, name, npc FROM hosts WHERE ip != ? AND npc = 1 ORDER BY name",
+      excludeIp,
     );
-    return [...rows, ...npcs].map((r) => ({ ip: r.ip, name: r.name, npc: r.npc === 1 }));
+    return [...rows, ...this.rng.sample(npcs, npcLimit)].map((r) => ({ ip: r.ip, name: r.name, npc: r.npc === 1 }));
   }
-  topPlayers(limit: number): { score: number; owner: string; ip: string }[] {
-    return this.all(
+  topPlayers(limit: number): TopPlayer[] {
+    return this.all<TopPlayer>(
       "SELECT score, owner, ip FROM hosts WHERE npc = 0 ORDER BY score DESC, owner DESC, ip DESC LIMIT ?",
       limit,
     );
@@ -211,14 +198,14 @@ export class Repo {
 
   private newIp(): string {
     for (;;) {
-      const ip = `10.${rint(0, 254)}.${rint(0, 254)}.${rint(1, 254)}`;
+      const ip = `10.${this.rng.int(0, 254)}.${this.rng.int(0, 254)}.${this.rng.int(1, 254)}`;
       if (!this.hostExists(ip)) return ip;
     }
   }
   private insertHost(name: string, owner: string, npc: boolean, level: number): string {
     const ip = this.newIp();
     this.run("INSERT INTO hosts (ip, name, owner, npc, level) VALUES (?, ?, ?, ?, ?)", ip, name, owner, npc ? 1 : 0, level);
-    for (const s of sample(SERVICES, rint(2, 4))) {
+    for (const s of this.rng.sample(SERVICES, this.rng.int(2, 4))) {
       this.run("INSERT INTO services (ip, port, name, version) VALUES (?, ?, ?, ?)", ip, s.port, s.name, s.version);
     }
     return ip;
@@ -243,13 +230,13 @@ export class Repo {
 
   // ---------------------------------------------------------------- servisler
   servicesOf(ip: string): Service[] {
-    return this.all("SELECT port, name, version FROM services WHERE ip = ? ORDER BY rowid", ip);
+    return this.all<Service>("SELECT port, name, version FROM services WHERE ip = ? ORDER BY rowid", ip);
   }
   /** Rastgele bir portu kapatir (en az 1 servis kalir). */
   closeRandomService(ip: string): Service | undefined {
     const list = this.servicesOf(ip);
     if (list.length <= 1) return undefined;
-    const gone = list[rint(0, list.length - 1)];
+    const gone = list[this.rng.int(0, list.length - 1)];
     this.run("DELETE FROM services WHERE ip = ? AND port = ?", ip, gone.port);
     return gone;
   }
@@ -359,7 +346,7 @@ export class Repo {
   }
 
   // ---------------------------------------------------------------- eski .data.json'dan aktarma
-  importLegacy(file: string): { hosts: number; users: number } {
+  importLegacy(file: string): LegacyImportResult {
     const d = JSON.parse(readFileSync(file, "utf8")) as LegacyData;
     const ms = (sec?: number) => Math.round((sec ?? 0) * 1000);
     return this.tx(() => {
